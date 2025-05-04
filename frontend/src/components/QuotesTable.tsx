@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { getRecords } from '../services/api'
 
 interface FreightRow {
@@ -39,12 +39,19 @@ const columns: { key: keyof FreightRow; label: string }[] = [
   { key: 'si_cut',             label: 'SI Cut'            },
   { key: 'departure_date',     label: 'Departure Date'    },
   { key: 'arrival_date',       label: 'Arrival Date'      },
-  { key: 'created_at',         label: 'Created At'        },
-  { key: 'updated_at',         label: 'Updated At'        },
 ]
+
+type SortConfig = {
+  key: keyof FreightRow
+  direction: 'asc' | 'desc'
+} | null
 
 export const QuotesTable: React.FC<{ refreshFlag?: number }> = ({ refreshFlag }) => {
   const [rows, setRows] = useState<FreightRow[]>([])
+  const [searchText, setSearchText] = useState('')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [sortConfig, setSortConfig] = useState<SortConfig>(null)
+  const pageSize = 10
 
   useEffect(() => {
     ;(async () => {
@@ -56,16 +63,6 @@ export const QuotesTable: React.FC<{ refreshFlag?: number }> = ({ refreshFlag })
       }
     })()
   }, [refreshFlag])
-
-  if (!rows.length) {
-    return (
-      <div className="flex justify-center py-8">
-        <div className="bg-white rounded-lg shadow-md p-6 text-gray-500">
-          No data has been added!
-        </div>
-      </div>
-    )
-  }
 
   const formatDate = (iso: string | null): string => {
     if (!iso) return '–'
@@ -83,40 +80,120 @@ export const QuotesTable: React.FC<{ refreshFlag?: number }> = ({ refreshFlag })
     return value ?? '–'
   }
 
+  const filtered = useMemo(() => {
+    return rows.filter(row =>
+      columns.some(col => {
+        const cell = row[col.key]
+        return cell?.toString().toLowerCase().includes(searchText.toLowerCase())
+      })
+    )
+  }, [rows, searchText])
+
+  const sorted = useMemo(() => {
+    if (!sortConfig) return filtered
+    const { key, direction } = sortConfig
+    return [...filtered].sort((a, b) => {
+      const aVal = a[key] ?? ''
+      const bVal = b[key] ?? ''
+      if (aVal < bVal) return direction === 'asc' ? -1 : 1
+      if (aVal > bVal) return direction === 'asc' ? 1 : -1
+      return 0
+    })
+  }, [filtered, sortConfig])
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
+  const pageRows = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
+  const requestSort = (key: keyof FreightRow) => {
+    let direction: 'asc' | 'desc' = 'asc'
+    if (sortConfig?.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc'
+    }
+    setSortConfig({ key, direction })
+  }
+
+  const getSortIndicator = (key: keyof FreightRow) => {
+    if (!sortConfig || sortConfig.key !== key) return ''
+    return sortConfig.direction === 'asc' ? ' ▲' : ' ▼'
+  }
+
+  if (!rows.length) {
+    return (
+      <div className="flex justify-center py-8">
+        <div className="bg-white rounded-lg shadow-md p-6 text-gray-500">
+          No data has been added!
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex justify-center py-8">
-      <div className="max-w-7xl w-full overflow-auto">
-        <table className="min-w-full bg-white border border-gray-200 rounded-lg text-sm">
-          <thead className="bg-gray-100">
-            <tr>
-              {columns.map((col) => (
-                <th
-                  key={col.key}
-                  className="px-4 py-2 text-left font-semibold text-gray-700 uppercase tracking-wide border-b border-gray-200"
-                >
-                  {col.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="bg-white">
-            {rows.map((row, idx) => (
-              <tr
-                key={idx}
-                className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
-              >
-                {columns.map((col) => (
-                  <td
-                    key={col.key as string}
-                    className="px-4 py-2 whitespace-nowrap text-gray-800 border-b border-gray-100 hover:bg-gray-50"
+    <div className="flex flex-col items-center py-8 bg-gray-100">
+      <div className="w-full max-w-7xl px-4 mb-4">
+        <input
+          type="text"
+          placeholder="Search…"
+          value={searchText}
+          onChange={e => {
+            setSearchText(e.target.value)
+            setCurrentPage(1)
+          }}
+          className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
+      <div className="max-w-7xl w-full px-4 overflow-x-auto">
+        <div className="bg-white rounded-md shadow-md border border-gray-200">
+          <table className="min-w-full divide-y divide-gray-200 whitespace-nowrap">
+            <thead className="bg-gray-50">
+              <tr>
+                {columns.map(col => (
+                  <th
+                    key={col.key}
+                    onClick={() => requestSort(col.key)}
+                    className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wide border-b border-gray-200 cursor-pointer select-none whitespace-nowrap"
                   >
-                    {formatCell(col.key, row[col.key])}
-                  </td>
+                    {col.label}{getSortIndicator(col.key)}
+                  </th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-100">
+              {pageRows.map((row, idx) => (
+                <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                  {columns.map(col => (
+                    <td
+                      key={col.key as string}
+                      className="px-6 py-4 text-sm text-gray-800 hover:bg-gray-50 whitespace-nowrap"
+                    >
+                      {formatCell(col.key, row[col.key])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-4 flex space-x-2">
+        <button
+          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+          disabled={currentPage === 1}
+          className="px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-100 disabled:opacity-50"
+        >
+          Previous
+        </button>
+        <span className="px-3 py-1 text-sm text-gray-700">
+          {currentPage} of {totalPages}
+        </span>
+        <button
+          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+          disabled={currentPage === totalPages}
+          className="px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-100 disabled:opacity-50"
+        >
+          Next
+        </button>
       </div>
     </div>
   )

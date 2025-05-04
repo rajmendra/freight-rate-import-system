@@ -7,7 +7,7 @@ export interface HomePageProps {
 
 const HomePage: React.FC<HomePageProps> = ({ setNotification }) => {
   return (
-    <div className="min-h-screen bg-gray-100">
+    <div className="bg-gray-100">
       <Dashboard setNotification={setNotification} />
     </div>
   )

@@ -1,14 +1,14 @@
-import React, { useState } from 'react'
-import axios from 'axios'
+import React, { useState, useEffect } from 'react'
 import * as XLSX from 'xlsx'
+import { uploadFile } from '../services/api'
 
-interface Props {
-  onClose: () => void
-  setNotification: (n: { type: 'success' | 'error'; message: string }) => void
-  onSuccess: (insertedCount: number) => void
+interface UploadModalProps {
+  onClose(): void
+  onSuccess(insertedCount: number): void
+  setNotification(n: { type: 'success' | 'error'; message: string }): void
 }
 
-const standardFields = [
+const STANDARD_FIELDS = [
   'shipment_id',
   'origin_port',
   'destination_port',
@@ -27,160 +27,167 @@ const standardFields = [
   'arrival_date',
 ] as const
 
-type Field = typeof standardFields[number]
+type FieldName = typeof STANDARD_FIELDS[number]
 
-const normalize = (s: string) =>
-  s.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+function normalizeHeader(header: string): string {
+  return header.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+}
 
-const findAutoMatch = (header: string): Field | '' => {
-  const nh = normalize(header)
-  for (const field of standardFields) {
-    const nf = normalize(field)
-    if (nh === nf || nh.includes(nf) || nf.includes(nh)) {
+function autoMatchField(header: string): FieldName | '' {
+  const norm = normalizeHeader(header)
+  for (const field of STANDARD_FIELDS) {
+    const normField = normalizeHeader(field)
+    if (norm === normField || norm.includes(normField) || normField.includes(norm)) {
       return field
     }
   }
   return ''
 }
 
-const UploadModal: React.FC<Props> = ({ onClose, setNotification, onSuccess }) => {
+const UploadModal: React.FC<UploadModalProps> = ({ onClose, onSuccess, setNotification }) => {
   const [file, setFile] = useState<File | null>(null)
   const [headers, setHeaders] = useState<string[]>([])
-  const [mapping, setMapping] = useState<Record<string, Field | ''>>({})
-  const [filter, setFilter] = useState('')
+  const [mapping, setMapping] = useState<Record<string, FieldName | ''>>({})
+  const [filterText, setFilterText] = useState('')
   const [errors, setErrors] = useState<{ row: number; messages: string[] }[]>([])
 
-  // load headers and build initial mapping
-  const parseHeaders = (file: File) => {
+  useEffect(() => {
+    if (!file) return
+
     const reader = new FileReader()
-    reader.onload = (evt) => {
-      const data = evt.target?.result
-      const wb = XLSX.read(data, { type: 'binary' })
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const arr = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 })
-      if (arr.length) {
-        const hdrs = arr[0]
-        setHeaders(hdrs)
-        const initial: Record<string, Field | ''> = {}
-        hdrs.forEach((h) => {
-          initial[h] = findAutoMatch(h)
-        })
-        setMapping(initial)
-      }
+    reader.onload = () => {
+      const workbook = XLSX.read(reader.result as ArrayBuffer, { type: 'array' })
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false })
+      const firstRow = rows[0] as string[]
+      setHeaders(firstRow)
+
+      const initialMap: Record<string, FieldName | ''> = {}
+      firstRow.forEach((h) => {
+        initialMap[h] = autoMatchField(h)
+      })
+      setMapping(initialMap)
     }
-    reader.readAsBinaryString(file)
+    reader.readAsArrayBuffer(file)
+  }, [file])
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0] ?? null
+    setFile(selected)
+    setErrors([])
   }
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return
-    const f = e.target.files[0]
-    setFile(f)
-    parseHeaders(f)
-  }
-
-  const handleSelect = (header: string, value: Field | '') => {
-    setMapping((m) => ({ ...m, [header]: value }))
+  const handleMappingChange = (header: string, field: FieldName | '') => {
+    setMapping((m) => ({ ...m, [header]: field }))
   }
 
   const handleUpload = async () => {
     if (!file) {
-      setNotification({ type: 'error', message: 'Please select a file first.' })
+      setNotification({ type: 'error', message: 'Please choose a file before proceeding.' })
       return
     }
-    // ensure all required fields are mapped?
-    // e.g. check mapping['Origin Port'] !== ''
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('mapping', JSON.stringify(mapping))
+
+    const form = new FormData()
+    form.append('file', file)
+    form.append('mapping', JSON.stringify(mapping))
+
     try {
-      const res = await axios.post('http://localhost:5000/api/freight/upload', formData)
-      const { inserted, errors: uploadErrors } = res.data
+      const resp = await uploadFile(form)
+      const { inserted, errors: uploadErrors } = resp.data
       setErrors(uploadErrors || [])
       onSuccess(inserted)
+      setNotification({ type: 'success', message: `${inserted} records imported.` })
     } catch {
-      setNotification({ type: 'error', message: 'Upload failed' })
+      setNotification({ type: 'error', message: 'Upload failed—please try again.' })
     }
   }
 
-  const chosen = new Set(Object.values(mapping).filter((v) => v) as Field[])
-
+  const chosenFields = new Set(Object.values(mapping).filter(Boolean) as FieldName[])
+  const allMapped = headers.length > 0 && headers.every(h => !!mapping[h])
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-[90vw] max-w-2xl max-h-[90vh] overflow-y-auto">
-        <header className="flex justify-between items-center border-b px-6 py-4">
+    <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+       
+        <div className="flex justify-between items-center border-b px-6 py-4">
           <h2 className="text-lg font-semibold">Import Shipments</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">&times;</button>
-        </header>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl leading-none">&times;</button>
+        </div>
 
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-6">
           <div>
             <input
               type="file"
-              onChange={handleFileChange}
-              className="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded file:border file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+              onChange={handleFileSelect}
+              className="block w-full text-sm text-gray-700
+                         file:mr-4 file:py-2 file:px-4
+                         file:rounded file:border file:text-sm
+                         file:font-semibold file:bg-blue-50 file:text-blue-700
+                         hover:file:bg-blue-100"
             />
-            {file && <p className="mt-2 text-sm text-gray-600">{file.name}</p>}
+            {file && <div className="mt-2 text-sm text-gray-600">Selected: {file.name}</div>}
           </div>
 
           {headers.length > 0 && (
-            <>    <p className="text-sm text-gray-700">
-            We’ve automatically mapped columns for you. Please review them below,
-            and select mappings for any that weren’t auto-matched.
-          </p>
-              <div className="flex justify-between items-center">
-
-          
-                <h3 className="font-medium">Map your columns</h3>
-                <input
-                  type="text"
-                  placeholder="Filter headers..."
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  className="border rounded px-2 py-1 text-sm"
-                />
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="min-w-full table-auto divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">CSV Column</th>
-                      <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Map To Field</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {headers
-                      .filter((h) => h.toLowerCase().includes(filter.toLowerCase()))
-                      .map((h) => (
-                        <tr key={h} className="hover:bg-gray-50">
-                          <td className="px-4 py-2 text-sm text-gray-800">{h}</td>
-                          <td className="px-4 py-2">
-                            <select
-                              value={mapping[h] || ''}
-                              onChange={(e) => handleSelect(h, e.target.value as Field)}
-                              className="w-full border rounded px-2 py-1 text-sm"
-                            >
-                              <option value="">— select field —</option>
-                              {standardFields.map((f) => (
-                                <option
-                                  key={f}
-                                  value={f}
-                                  disabled={chosen.has(f) && mapping[h] !== f}
-                                >
-                                  {f}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
+            <p className="text-sm text-gray-700">
+              We’ve auto-matched common columns. Please review below and map any remaining ones.
+            </p>
           )}
 
-          <div className="flex justify-end space-x-3 pt-4 border-t">
+          {headers.length > 0 && (
+            <div className="flex justify-end">
+              <input
+                type="text"
+                placeholder="Filter columns…"
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                className="border border-gray-300 rounded px-3 py-1 text-sm w-60"
+              />
+            </div>
+          )}
+
+          {headers.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full table-auto divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">CSV Column</th>
+                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-700">Database Field</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {headers.filter((h) =>
+                    h.toLowerCase().includes(filterText.toLowerCase())
+                  ).map((header) => (
+                    <tr key={header} className="hover:bg-gray-50">
+                      <td className="px-4 py-2 text-sm text-gray-800">{header}</td>
+                      <td className="px-4 py-2">
+                        <select
+                          value={mapping[header] || ''}
+                          onChange={(e) =>
+                            handleMappingChange(header, e.target.value as FieldName)
+                          }
+                          className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                        >
+                          <option value="">— select field —</option>
+                          {STANDARD_FIELDS.map((field) => (
+                            <option
+                              key={field}
+                              value={field}
+                              disabled={chosenFields.has(field) && mapping[header] !== field}
+                            >
+                              {field}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="flex justify-end space-x-4 pt-4 border-t">
             <button
               onClick={onClose}
               className="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
@@ -189,6 +196,7 @@ const UploadModal: React.FC<Props> = ({ onClose, setNotification, onSuccess }) =
             </button>
             <button
               onClick={handleUpload}
+              disabled={!allMapped}
               className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
             >
               Process Shipments
@@ -196,12 +204,12 @@ const UploadModal: React.FC<Props> = ({ onClose, setNotification, onSuccess }) =
           </div>
 
           {errors.length > 0 && (
-            <div className="mt-6 bg-red-50 border border-red-200 text-red-700 p-3 rounded max-h-40 overflow-y-auto">
-              <h4 className="font-semibold mb-2">Row Errors:</h4>
+            <div className="mt-6 bg-red-50 border border-red-200 text-red-700 p-4 rounded max-h-48 overflow-y-auto">
+              <h4 className="font-semibold mb-2">Import Errors</h4>
               {errors.map((err) => (
-                <p key={err.row} className="text-sm">
-                  <span className="font-medium">Row {err.row}:</span> {err.messages.join(', ')}
-                </p>
+                <div key={err.row} className="text-sm mb-1">
+                  <span className="font-medium">Row {err.row}:</span> {err.messages.join('; ')}
+                </div>
               ))}
             </div>
           )}
