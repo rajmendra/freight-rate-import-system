@@ -1,3 +1,5 @@
+Thought for a couple of seconds
+
 
 ````markdown
 # 🚢 Freight Rate Import System
@@ -19,7 +21,7 @@ A web app to upload, map, validate, and store freight rate data from `.csv` and 
 ### 1. Clone the project
 
 ```bash
-git clone https://your-repo-url.git
+git clone git@github.com:rajmendra/freight-rate-import-system.git
 cd freight-rate-import-system
 ````
 
@@ -73,7 +75,7 @@ npm install
    npm run dev
    ```
 
-The API will be available at `http://localhost:5000/api/freight`.
+   The API will be available at `http://localhost:5000/api/freight`.
 
 ---
 
@@ -98,6 +100,66 @@ Vite will serve the app (usually at `http://localhost:5173`).
 5. For any **unmatched** columns, choose the corresponding database field from the dropdown.
 6. Click **Process Shipments**.
 7. On success, the table will refresh with the newly imported records.
+
+---
+
+## 🧭 How It Works
+
+1. **File Upload**
+
+   * You choose a `.csv` or `.xlsx` file.
+   * Example: **rates\_jan.csv** with headers `Origin`, `Dest`, `Rate_20`, `Rate_40`, `Date`.
+
+2. **Header Parsing & Auto-Mapping**
+
+   * The app reads the first row of your file.
+   * It normalizes each header (lowercase, strip punctuation) and tries to match it to one of our **standard fields**.
+   * Example mapping result:
+
+     ```
+     "Origin"      → "origin_port"
+     "Dest"        → "destination_port"
+     "Rate_20"     → "ocean_freight_rate"
+     "Rate_40"     → ""  (no auto‐match)
+     "Date"        → "effective_date"
+     ```
+
+3. **Manual Mapping**
+
+   * Any header without a confident auto-match appears in a “please map” list.
+   * You select from a dropdown of standard fields (no duplicates allowed).
+   * Once every header is mapped, the **Process Shipments** button unlocks.
+
+4. **Validation**
+
+   * Each mapped record is checked:
+
+     * Required fields (e.g. `origin_port`, `carrier`) must be present.
+     * Numeric fields (e.g. `ocean_freight_rate`) must parse as numbers.
+     * Date fields must be valid ISO dates.
+   * Invalid rows are skipped, and you see detailed error messages listing row numbers and issues.
+
+5. **Database Insert/Update**
+
+   * Valid records are bulk‐inserted into `freight_rates`.
+   * If a record conflicts on `(carrier, origin_port, destination_port, container_type, effective_date)`, its `ocean_freight_rate` and `expiry_date` get updated instead of inserting a duplicate.
+   * Example SQL snippet under the hood:
+
+     ```sql
+     INSERT INTO freight_rates (...)
+     VALUES (...)
+     ON CONFLICT (carrier, origin_port, destination_port, container_type, effective_date)
+     DO UPDATE SET
+       ocean_freight_rate = EXCLUDED.ocean_freight_rate,
+       expiry_date       = EXCLUDED.expiry_date,
+       updated_at        = NOW();
+     ```
+
+6. **Feedback & Display**
+
+   * You receive a success banner: “X records imported.”
+   * Any validation errors show in a scrollable box labeled with row numbers.
+   * The main table refreshes to display all stored rates, including new or updated entries.
 
 ---
 
@@ -139,4 +201,6 @@ Follow the on-screen prompts to map your file's headers to these fields.
 ---
 
 If all steps are followed correctly, file uploads and imports should work seamlessly. Enjoy! 🎉
-"# ffreight-rate-import-xystem" 
+
+```
+```
