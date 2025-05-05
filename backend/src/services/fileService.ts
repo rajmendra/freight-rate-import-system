@@ -1,126 +1,132 @@
-import fs from 'fs';
-import path from 'path';
-import csv from 'csv-parse';
-import xlsx from 'xlsx';
-import pool from '../models/FreightData';
-import { validateRecord } from '../utils/validator';
+import fs from 'fs'
+import path from 'path'
+import csv from 'csv-parse'
+import xlsx from 'xlsx'
+import pool from '../config/db'
+import { validateRecord } from '../utils/validator'
+import { FreightRate } from '../common/types'
 
-export interface FreightRecord {
-  origin_port?: string;
-  destination_port?: string;
-  carrier?: string;
-  container_type?: string;
-  ocean_freight_rate?: number;
-  effective_date?: string;
-  expiry_date?: string;
-  service?: string;
-  transit_duration?: string;
-  commodity?: string;
-  remarks?: string;
-  agent?: string;
-  si_cut?: string;
-  departure_date?: string;
-  arrival_date?: string;
-}
+type Mapping = Record<string, keyof FreightRate>
 
 export const processFile = async (
-    filePath: string,
-    originalName: string,
-    mapping: { [key: string]: string }
-  ): Promise<any> => {
-    const ext = path.extname(originalName).toLowerCase();
-    let records: any[] = [];
-  
-    if (ext === '.csv') {
-      const fileContent = fs.readFileSync(filePath, 'utf-8');
-      records = await parseCSV(fileContent);
-    } else if (ext === '.xlsx') {
-      records = parseXLSX(filePath);
-    } else {
-      throw new Error('Unsupported file type');
+  filePath: string,
+  originalName: string,
+  mapping: Mapping
+): Promise<{ inserted: number; errors: { row: number; messages: string[] }[] }> => {
+  const ext = path.extname(originalName).toLowerCase()
+  let rawRows: any[]
+
+  if (ext === '.csv') {
+    const fileContent = fs.readFileSync(filePath, 'utf-8')
+    rawRows = await parseCSV(fileContent)
+  } else if (ext === '.xlsx') {
+    rawRows = parseXLSX(filePath)
+  } else {
+    throw new Error(`Unsupported file type: ${ext}`)
+  }
+
+  const mapped: FreightRate[] = rawRows.map((row) =>
+    Object.entries(mapping).reduce<Partial<FreightRate>>((acc, [src, dest]) => {
+      acc[dest] = row[src]
+      return acc
+    }, {}) as FreightRate
+  )
+
+  const valid: FreightRate[] = [];
+  const errors: { row: number; messages: string[] }[] = [];
+
+  mapped.forEach((rec, i) => {
+    const recErrors = validateRecord(rec)
+    if (recErrors.length){
+      errors.push({ row: i + 1, messages: recErrors });
     }
-  
-    const mappedRecords = records.map((row) => {
-      const mapped: any = {};
-      Object.keys(mapping).forEach((sourceCol) => {
-        mapped[mapping[sourceCol]] = row[sourceCol];
-      });
-      return mapped;
-    });
-  
-    const validRecords: FreightRecord[] = [];
-    const errors: { row: number; messages: string[] }[] = [];
-  
-    mappedRecords.forEach((rec, index) => {
-      const recErrors = validateRecord(rec);
-      if (recErrors.length > 0) {
-        errors.push({ row: index + 1, messages: recErrors });
-      } else {
-        validRecords.push(rec);
-      }
-    });
-  
-    await insertRecords(validRecords);
-    fs.unlinkSync(filePath);
-  
-    return { inserted: validRecords.length, errors };
-  };
-const parseCSV = (data: string): Promise<any[]> => {
-  return new Promise((resolve, reject) => {
-    csv.parse(data, { columns: true, trim: true }, (err, output) => {
-      if (err) reject(err);
-      else resolve(output);
-    });
-  });
-};
+    else {
+      valid.push(rec);
+    }
+  })
+  if (errors.length) {
+    throw new Error(
+      `VALIDATION_ERRORS:${JSON.stringify(errors)}`
+    )
+  }
+  await insertRecords(valid)
+  fs.unlinkSync(filePath)
+
+  return { inserted: valid.length, errors }
+}
+
+const parseCSV = (data: string): Promise<any[]> =>
+  new Promise((resolve, reject) =>
+    csv.parse(data, { columns: true, trim: true }, (err, out) =>
+      err ? reject(err) : resolve(out)
+    )
+  )
 
 const parseXLSX = (filePath: string): any[] => {
-  const workbook = xlsx.readFile(filePath);
-  const sheetName = workbook.SheetNames[0];
-  const sheet = workbook.Sheets[sheetName];
-  return xlsx.utils.sheet_to_json(sheet);
-};
+  const wb = xlsx.readFile(filePath)
+  const sheet = wb.Sheets[wb.SheetNames[0]]
+  return xlsx.utils.sheet_to_json(sheet)
+}
 
-const insertRecords = async (records: FreightRecord[]): Promise<void> => {
-  const client = await pool.connect();
+const insertRecords = async (records: FreightRate[]): Promise<void> => {
+  const client = await pool.connect()
   try {
+    const sql = `
+      INSERT INTO freight_rates (
+        origin_port, destination_port, carrier, container_type,
+        ocean_freight_rate, effective_date, expiry_date, service,
+        transit_duration, commodity, remarks, agent, si_cut,
+        departure_date, arrival_date, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, NOW(), NOW()
+      )
+      ON CONFLICT (
+        carrier, origin_port, destination_port, container_type, effective_date
+      ) DO UPDATE SET
+        ocean_freight_rate = EXCLUDED.ocean_freight_rate,
+        expiry_date       = EXCLUDED.expiry_date,
+        updated_at        = NOW()
+    `
+
     for (const rec of records) {
-      await client.query(
-        `INSERT INTO freight_rates (
-          origin_port, destination_port, carrier, container_type,
-          ocean_freight_rate, effective_date, expiry_date, service,
-          transit_duration, commodity, remarks, agent, si_cut,
-          departure_date, arrival_date, created_at, updated_at
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-          $13, $14, $15, NOW(), NOW()
-        )
-        ON CONFLICT (carrier, origin_port, destination_port, container_type, effective_date)
-        DO UPDATE SET
-          ocean_freight_rate = EXCLUDED.ocean_freight_rate,
-          expiry_date = EXCLUDED.expiry_date,
-          updated_at = NOW()`,
-        [
-          rec.origin_port,
-          rec.destination_port,
-          rec.carrier,
-          rec.container_type,
-          rec.ocean_freight_rate,
-          rec.effective_date,
-          rec.expiry_date,
-          rec.service,
-          rec.transit_duration,
-          rec.commodity,
-          rec.remarks,
-          rec.agent,
-          rec.si_cut,
-          rec.departure_date,
-          rec.arrival_date
-        ]
-      );
+      const {
+        origin_port,
+        destination_port,
+        carrier,
+        container_type,
+        ocean_freight_rate,
+        effective_date,
+        expiry_date,
+        service,
+        transit_duration,
+        commodity,
+        remarks,
+        agent,
+        si_cut,
+        departure_date,
+        arrival_date,
+      } = rec
+
+      await client.query(sql, [
+        origin_port,
+        destination_port,
+        carrier,
+        container_type,
+        ocean_freight_rate,
+        effective_date,
+        expiry_date,
+        service,
+        transit_duration,
+        commodity,
+        remarks,
+        agent,
+        si_cut,
+        departure_date,
+        arrival_date,
+      ])
     }
   } finally {
-    client.release();
+    client.release()
   }
-};
+}

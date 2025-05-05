@@ -1,0 +1,4 @@
+Origin Port,Destination Port,Container Type,Ocean Freight Rate,Carrier,Effective Date
+New York,London,20ft,1500,Maersk,2024-03-07
+Los Angeles,Tokyo,40ft,2200,MSC,2024-03-08
+Shanghai,Hamburg,40ft,1800,CMA CGM,2024-03-09

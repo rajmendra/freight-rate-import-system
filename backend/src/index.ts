@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import freightRoutes from './routes/freightRoutes';
+import { initFreightRatesTable } from './models'
 
 dotenv.config();
 
@@ -20,12 +21,12 @@ async function startServer() {
     client.release();
 
     console.log('Postgres connection OK — starting server');
-    app.use('/api/freight', freightRoutes);
 
-    app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
-      console.error(err.stack);
-      res.status(500).json({ error: 'Internal server error' });
-    });
+    await initFreightRatesTable()
+    console.log('freight_rates table is ready')
+
+    
+    app.use('/api/freight', freightRoutes);
 
     const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

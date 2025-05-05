@@ -1,6 +1,6 @@
-import { FreightRecord } from '../services/fileService';
+import { FreightRate } from '../common/types'
 
-export const validateRecord = (record: FreightRecord): string[] => {
+export const validateRecord = (record: FreightRate): string[] => {
   const errors: string[] = [];
 
   if (!record.origin_port) errors.push('origin_port is required');
@@ -9,7 +9,7 @@ export const validateRecord = (record: FreightRecord): string[] => {
   if (record.ocean_freight_rate && isNaN(Number(record.ocean_freight_rate))) {
     errors.push('ocean_freight_rate must be a number');
   }
-  if (record.effective_date && isNaN(Date.parse(record.effective_date))) {
+  if (record.effective_date && isNaN(Date.parse(record.effective_date.toString()))) {
     errors.push('effective_date must be a valid date');
   }
 
